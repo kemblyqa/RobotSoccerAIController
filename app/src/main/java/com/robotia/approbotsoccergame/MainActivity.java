@@ -6,57 +6,93 @@ import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Message;
+import android.os.ParcelUuid;
 import android.support.annotation.Nullable;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Set;
+
+import io.socket.client.IO;
+import io.socket.client.Socket;
+import io.socket.emitter.Emitter;
 
 public class MainActivity extends AppCompatActivity {
     //UI elements
-    TextView commandReceived;
+    TextView commandReceived, switchBt;
     Button button;
-
     //Handler
     static Handler handler;
     static final int HANDLER_STATE = 0;//used to identify handler message
-
     //Bluetooth
     private BluetoothDevicesService bluetoothDevicesService = BluetoothDevicesService.getInstance();
-    public ArrayList<BluetoothDevice> bluetoothDevices;
     private BluetoothAdapter bluetoothAdapter;
-
+    //Socket
+    Socket socket;
+    private static final String BASE_URI = "http://172.24.110.50:3000";
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         commandReceived = findViewById(R.id.commandTxt);
+        switchBt = findViewById(R.id.switchBt);
         button = findViewById(R.id.button);
         bluetoothAdapter = bluetoothDevicesService.getBluetoothAdapter();
         makeBluetoothConnection();
-
-        button.setOnClickListener(new View.OnClickListener() {
+        startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE), BluetoothDevicesService.REQUEST_BLUETOOTH_DISCOVERABLE);
+        try {
+            socket = IO.socket(BASE_URI);
+            socket.connect();
+            socket.emit("join","GAME");
+        } catch (URISyntaxException e) {
+            finish();
+        }
+        socket.on("test_response", new Emitter.Listener() {
             @Override
-            public void onClick(View v) {
-                // bluetoothDevicesService.createServerConnection();
-
+            public void call(final Object... args) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        String data = (String) args[0];
+                        Toast.makeText(MainActivity.this,data,Toast.LENGTH_SHORT).show();
+                    }
+                });
             }
         });
-
+        socket.on("comm", new Emitter.Listener() {
+            @Override
+            public void call(final Object... args) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        String data = (String) args[0];
+                        commandReceived.setText("Command: "+data);
+                        if(bluetoothDevicesService.isSocketAlive()) bluetoothDevicesService.sendWord(data.charAt(0));
+                        else Toast.makeText(MainActivity.this,"Bluetooth socket not connected",Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        });
         handler = new Handler(){
             @Override
             public void handleMessage(Message msg) {
-                if(msg.what == HANDLER_STATE){
-                    Toast.makeText(bluetoothDevicesService, "Por aquí", Toast.LENGTH_SHORT).show();
-                    String readMessage = (String) msg.obj;// msg.arg1 = bytes from connect thread
-                    commandReceived.setText("algooooo");
-                    // commandReceived.setText(readMessage);
-                }
-                super.handleMessage(msg);
+            if(msg.what == HANDLER_STATE){
+                Toast.makeText(bluetoothDevicesService, "Mensaje de App", Toast.LENGTH_SHORT).show();
+                String readMessage = (String) msg.obj;// msg.arg1 = bytes from connect thread
+                commandReceived.setText(readMessage);
+            }
+            super.handleMessage(msg);
             }
         };
     }
@@ -66,7 +102,7 @@ public class MainActivity extends AppCompatActivity {
             case BluetoothDevicesService.REQUEST_BLUETOOTH:{
                 if(resultCode == Activity.RESULT_OK){
                     //here a toggle image or something
-                    Toast.makeText(this, "Bluetooth connected....", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Bluetooth connected...", Toast.LENGTH_SHORT).show();
                 }
                 else if (resultCode == Activity.RESULT_CANCELED) {
                     finish();
@@ -77,8 +113,7 @@ public class MainActivity extends AppCompatActivity {
             case BluetoothDevicesService.REQUEST_BLUETOOTH_DISCOVERABLE:{
                 if(resultCode > 0){
                     //here a toggle image or something
-                    Toast.makeText(this, "Bluetooth discoverable....", Toast.LENGTH_SHORT).show();
-                   // bluetoothDevicesService.createServerConnection();
+                    Toast.makeText(this, "Bluetooth now is discoverable...", Toast.LENGTH_SHORT).show();
                 }
                 else if (resultCode == Activity.RESULT_CANCELED) {
                     finish();
@@ -92,23 +127,45 @@ public class MainActivity extends AppCompatActivity {
         }
         super.onActivityResult(requestCode, resultCode, data);
     }
-    public void requestForBluetoothService(View view){
-        if (bluetoothAdapter.isEnabled()) {
-            bluetoothAdapter.disable();
-            //here a toggle image or something
-        } else {
-            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-            startActivityForResult(enableBtIntent, BluetoothDevicesService.REQUEST_BLUETOOTH);
-        }
-    }
     private void makeBluetoothConnection(){
         if (!bluetoothAdapter.isEnabled()) {
             startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BluetoothDevicesService.REQUEST_BLUETOOTH);
         } else {
-            Toast.makeText(this, "Bluetooth connected....", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Bluetooth actually connected...", Toast.LENGTH_SHORT).show();
         }
-        startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
-                        .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300),
-                BluetoothDevicesService.REQUEST_BLUETOOTH_DISCOVERABLE);
     }
+    public void createNewBluetoothConnection(View view){
+        bluetoothDevicesService.closeConnection();
+        switchBt.setText("OFF");
+        Set<BluetoothDevice> pairedDevices = bluetoothAdapter.getBondedDevices();
+        for(BluetoothDevice bt : pairedDevices){
+            if(bt.getAddress().equals(BluetoothDevicesService.ARDUINO_MAC_ADDRESS)){
+                if(bluetoothDevicesService.createConnection(bt, BluetoothDevicesService.MY_UUID)) switchBt.setText("ON");
+                else Toast.makeText(bluetoothDevicesService, "Wrong device", Toast.LENGTH_SHORT).show();
+            }
+            else Toast.makeText(bluetoothDevicesService, "Couldn't connect device", Toast.LENGTH_SHORT).show();
+        }
+    }
+//    public void getUUIDs(){
+//        try {
+//            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+//            Method getUuidsMethod = BluetoothAdapter.class.getDeclaredMethod("getUuids", null);
+//            ParcelUuid[] uuids = (ParcelUuid[]) getUuidsMethod.invoke(adapter, null);
+//
+//            if(uuids != null) {
+//                for (ParcelUuid uuid : uuids) {
+//                    Log.d("my.....", "UUID: " + uuid.getUuid().toString());
+//                }
+//            }else{
+//                Log.d("my", "Uuids not found, be sure to enable Bluetooth!");
+//            }
+//
+//        } catch (NoSuchMethodException e) {
+//            e.printStackTrace();
+//        } catch (IllegalAccessException e) {
+//            e.printStackTrace();
+//        } catch (InvocationTargetException e) {
+//            e.printStackTrace();
+//        }
+//    }
 }

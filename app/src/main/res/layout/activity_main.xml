@@ -15,14 +15,22 @@
             android:id="@+id/commandTxt"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Command"
+            android:text="Command: none"
+            android:textSize="50sp"
             android:layout_gravity="center"/>
-
+        <TextView
+            android:id="@+id/switchBt"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="OFF"
+            android:textSize="30sp"
+            android:layout_gravity="center"/>
         <Button
             android:id="@+id/button"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Button" />
+            android:text="Connect to arduino"
+            android:onClick="createNewBluetoothConnection"/>
     </LinearLayout>
 
 </android.support.constraint.ConstraintLayout>
